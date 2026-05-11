@@ -1,3 +1,4 @@
+import json
 import copy
 import logging
 import ssl
@@ -43,7 +44,7 @@ from robusta.core.reporting.blocks import (
 )
 from robusta.core.reporting.callbacks import ExternalActionRequestBuilder
 from robusta.core.reporting.consts import EnrichmentAnnotation, FindingSource, FindingType, SlackAnnotations
-from robusta.core.reporting.holmes import HolmesResultsBlock, ToolCallResult
+from robusta.core.reporting.holmes import HolmesResultsBlock, HolmesChatResultsBlock, ToolCallResult
 from robusta.core.reporting.url_helpers import convert_prom_graph_url_to_robusta_metrics_explorer
 from robusta.core.reporting.utils import add_pngs_for_all_svgs
 from robusta.core.sinks.common import ChannelTransformer
@@ -203,7 +204,7 @@ class SlackSender:
                     table_rows.append(f"--- {subheader.capitalize()} ---")
                     continue
 
-                table_rows.append(f"● {row[0]} `{row[1]}`")
+                table_rows.append(f"▸ {row[0]} `{row[1]}`")
 
             table_str = "\n".join(table_rows)
             table_str = f"{block.table_name} \n{table_str}"
@@ -435,7 +436,7 @@ class SlackSender:
 
         # Prepare data for template
         status_text = "Firing" if status == FindingStatus.FIRING else "Resolved"
-        status_emoji = "⚠️" if status == FindingStatus.FIRING else "✅"
+        status_emoji = "????????????" if status == FindingStatus.FIRING else "??????"
         investigate_uri = finding.get_investigate_uri(self.account_id,
                                                       self.cluster_name) if platform_enabled else ""
 
@@ -577,9 +578,10 @@ class SlackSender:
 
         text = "*AI used info from alert and the following tools:*"
         for tool in tool_calls:
-            file_response = self.slack_client.files_upload_v2(content=tool.result, title=f"{tool.description}")
+            tool_content = tool.result if isinstance(tool.result, str) else json.dumps(tool.result, indent=2)
+            file_response = self.slack_client.files_upload_v2(content=tool_content, title=f"{tool.description}")
             permalink = file_response["file"]["permalink"]
-            text += f"\n• `<{permalink}|{tool.description}>`"
+            text += f"\n?????? `<{permalink}|{tool.description}>`"
 
         self.slack_client.chat_postMessage(
             channel=slack_channel,
@@ -612,7 +614,7 @@ class SlackSender:
             logging.warning(f"No matching ai enrichments found for id: {finding.id} - {title}")
             return
 
-        ai_analysis_blocks = [block for block in ai_enrichments[0].blocks if isinstance(block, HolmesResultsBlock)]
+        ai_analysis_blocks = [block for block in ai_enrichments[0].blocks if isinstance(block, (HolmesResultsBlock, HolmesChatResultsBlock))]
         if not ai_analysis_blocks:
             logging.warning(f"No matching ai blocks found for id: {finding.id} - {title}")
             return
