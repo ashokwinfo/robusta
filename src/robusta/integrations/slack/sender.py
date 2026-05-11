@@ -576,23 +576,33 @@ class SlackSender:
         if not tool_calls:
             return
 
-        text = "*AI used info from alert and the following tools:*"
+        header = "*AI used info from alert and the following tools:*"
+        lines = []
         for tool in tool_calls:
             tool_content = tool.result if isinstance(tool.result, str) else json.dumps(tool.result, indent=2)
             file_response = self.slack_client.files_upload_v2(content=tool_content, title=f"{tool.description}")
             permalink = file_response["file"]["permalink"]
-            text += f"\n?????? `<{permalink}|{tool.description}>`"
+            lines.append(f"\n?????? `<{permalink}|{tool.description}>`")
 
+        # Slack block text limit is 3000 chars. Build blocks in chunks to stay under the limit.
+        SLACK_BLOCK_TEXT_LIMIT = 2990
+        blocks = []
+        current_chunk = header
+        for line in lines:
+            if len(current_chunk) + len(line) > SLACK_BLOCK_TEXT_LIMIT:
+                blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": current_chunk}})
+                current_chunk = line.lstrip("\n")
+            else:
+                current_chunk += line
+        if current_chunk:
+            blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": current_chunk}})
+
+        full_text = header + "".join(lines)
         self.slack_client.chat_postMessage(
             channel=slack_channel,
             thread_ts=parent_thread,
-            text=text,
-            blocks=[
-                {
-                    "type": "section",
-                    "text": {"type": "mrkdwn", "text": text},
-                }
-            ],
+            text=full_text,
+            blocks=blocks,
         )
 
     def send_holmes_analysis(
