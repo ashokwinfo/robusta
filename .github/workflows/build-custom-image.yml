@@ -1,0 +1,66 @@
+name: Build & Push Custom Robusta Runner
+
+on:
+  push:
+    branches:
+      - our-customizations
+  workflow_dispatch:  # allow manual trigger
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY: robusta-runner
+  AWS_ACCOUNT_ID: 803103365620
+
+jobs:
+  build-and-push:
+    name: Build and Push to ECR
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      id-token: write   # needed for OIDC auth to AWS
+
+    steps:
+      - name: Checkout our-customizations branch
+        uses: actions/checkout@v4
+        with:
+          ref: our-customizations
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ env.AWS_ACCOUNT_ID }}:role/github-actions-ecr-push
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Extract version tag from upstream
+        id: version
+        run: |
+          UPSTREAM_TAG=$(git describe --tags --abbrev=0 origin/master 2>/dev/null || echo "0.38.0")
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          echo "image_tag=${UPSTREAM_TAG}-custom-${SHORT_SHA}" >> $GITHUB_OUTPUT
+          echo "Building image tag: ${UPSTREAM_TAG}-custom-${SHORT_SHA}"
+
+      - name: Build Docker image
+        run: |
+          docker build \
+            --tag ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPOSITORY }}:${{ steps.version.outputs.image_tag }} \
+            --tag ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPOSITORY }}:latest \
+            .
+
+      - name: Push to ECR
+        run: |
+          docker push ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPOSITORY }}:${{ steps.version.outputs.image_tag }}
+          docker push ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPOSITORY }}:latest
+
+      - name: Output image URI
+        run: |
+          echo "✅ Image pushed:"
+          echo "  ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPOSITORY }}:${{ steps.version.outputs.image_tag }}"
+          echo ""
+          echo "Update robusta-values.yaml with:"
+          echo "  runner:"
+          echo "    image: ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPOSITORY }}:${{ steps.version.outputs.image_tag }}"
