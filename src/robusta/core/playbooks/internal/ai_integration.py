@@ -4,6 +4,7 @@ import logging
 import re
 from typing import NoReturn
 import requests
+from jinja2 import Template, Undefined
 from prometrix import PrometheusQueryResult
 
 from robusta.core.model.base_params import (
@@ -318,10 +319,33 @@ def holmes_chat(event: ExecutionBaseEvent, params: HolmesChatParams):
 
     cluster_name = event.get_context().cluster_name
 
+    # Render Jinja2 template variables ({{ subject.name }}, {{ subject.namespace }}, etc.)
+    # from the event's existing findings. report_crash_loop or similar actions that run
+    # before holmes_chat will have already added a finding with the real subject.
+    ask = params.ask
+    subject_context = {"name": "", "namespace": "", "kind": ""}
+    if event.sink_findings:
+        for findings_list in event.sink_findings.values():
+            if findings_list:
+                # The oldest finding (last in list) is the original one with the real subject
+                subject = findings_list[-1].subject
+                if subject and subject.name:
+                    subject_context = {
+                        "name": subject.name,
+                        "namespace": subject.namespace or "",
+                        "kind": subject.subject_type.value if subject.subject_type else "",
+                    }
+                    break
+    try:
+        ask = Template(ask).render(subject=subject_context)
+    except Exception:
+        logging.warning("holmes_chat: failed to render ask template, using raw ask text", exc_info=True)
+
     try:
         # Pass through all parameters to Holmes, excluding fields used only by this action
         # This allows Holmes clients/servers to add new parameters without requiring updates here
         params_dict = params.dict(exclude={"holmes_url", "render_graph_images"})
+        params_dict["ask"] = ask  # use template-rendered ask
         holmes_req = HolmesChatRequest(**params_dict)
         url = f"{holmes_url}/api/chat"
         if params.stream:
